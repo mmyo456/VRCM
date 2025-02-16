@@ -53,6 +53,17 @@ jobs:
           echo "android.nonTransitiveRClass=true" >> gradle.properties
           echo "android.useAndroidX=true" >> gradle.properties
 
+      - name: Extract App Version
+        id: extract_version
+        run: |
+          APP_VERSION=$(grep -oP '^app-version\s*=\s*"\K[^"]+' gradle/libs.versions.toml | head -n 1)
+          if [ -z "$APP_VERSION" ]; then
+            echo "未能提取到版本号，请检查 gradle/libs.versions.toml 中是否存在 app-version = \"x.y.z\""
+            exit 1
+          fi
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
+          echo "::notice::提取到的版本号: $APP_VERSION"
+
       - name: Grant execute permission for gradlew # 给 gradlew 脚本添加执行权限
         run: chmod +x gradlew
 
@@ -62,18 +73,36 @@ jobs:
       - name: List APK files (for debugging) # 列出所有生成的 APK 文件（用于调试）
         run: find . -name "*.apk"
 
-      # 将生成的 APK 文件复制到单独目录，并可选地重命名为 app-debug.apk
-      - name: Move Debug APK # 移动 Debug APK 文件到指定目录
+      - name: Move and Rename Debug APK # 移动并重命名 Debug APK 文件
         run: |
           mkdir -p artifact
-          # 如果只会生成一个 .apk，可直接执行重命名：
-          # find . -name "*.apk" -exec mv {} artifact/app-debug.apk \;
-          #
-          # 如果可能生成多个 .apk，这里示例是复制到 artifact 目录下：
-          find . -name "*.apk" -exec cp {} artifact/ \;
+          find . -name "*.apk" -exec mv {} artifact/VRCM-v${{ env.APP_VERSION }}.apk \;
 
       - name: Upload Debug Artifact # 上传构建好的 Debug APK 作为工作流产物
         uses: actions/upload-artifact@v4
         with:
           name: VRCM-DEBUG
           path: artifact/*.apk
+
+      - name: Create Pre-Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.APP_VERSION }} # 使用提取出来的版本号
+          release_name: 'Pre-release version ${{ env.APP_VERSION }}' # 发布名称
+          body: |
+            Here are the changes made in this pre-release...
+          draft: false
+          prerelease: true # 设置为预发布
+
+      - name: Upload APK to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing its ID to get its outputs object, which include a `upload_url`.
+          asset_path: ./artifact/VRCM-v${{ env.APP_VERSION }}.apk # 使用带有版本号的APK文件路径
+          asset_name: VRCM-v${{ env.APP_VERSION }}.apk # APK 文件名
+          asset_content_type: application/vnd.android.package-archive
